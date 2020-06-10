@@ -99,42 +99,41 @@ pol = np.append(steps, last_step, 1).astype(int)
 
 
 def fwd_messages(timestep, policy):
-    m_fwd = np.zeros((T, n_h, T))
-    m_fwd[0, :, timestep] = 1. / n_h  # obs[o[0]]
+    m_fwd = np.zeros((T, n_h))
+    m_fwd[0, :] = 1. / n_h  # obs[o[0]]
     for k in range(1, T):
         # starting at timestep 1 to make sure in first step this works
         action = pol[policy, k - 1]
         if 0 < k <= timestep + 1:
             # for current and past states use observations
-            x = m_fwd[k - 1, :, timestep] * obs[o[k - 1]]
-            m_fwd[k, :, timestep] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :, timestep].sum()
-            m_fwd[k, :, timestep] /= m_fwd_norm
+            x = m_fwd[k - 1, :] * obs[o[k - 1]]
+            m_fwd[k, :] = np.dot(B[:, :, action], x)
+            m_fwd_norm = m_fwd[k, :].sum()
+            m_fwd[k, :] /= m_fwd_norm
         elif k > timestep + 1:
             # for not yet seen states use prior
-            x = m_fwd[k - 1, :, timestep] * np.dot(obs.T, prior)
-            m_fwd[k, :, timestep] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :, timestep].sum()
-            m_fwd[k, :, timestep] /= m_fwd_norm
+            x = m_fwd[k - 1, :] * np.dot(obs.T, prior)
+            m_fwd[k, :] = np.dot(B[:, :, action], x)
+            m_fwd_norm = m_fwd[k, :].sum()
+            m_fwd[k, :] /= m_fwd_norm
 
     return m_fwd
 
 
 # berechne backward messages
 def bwd_messages(timestep, policy):
-    m_bwd = np.zeros((T, n_h, T))
-    m_bwd = np.zeros((T, n_h, T))
-    m_bwd[6, :, timestep] = np.dot(obs.T, prior)
+    m_bwd = np.zeros((T, n_h))
+    m_bwd[6, :] = np.dot(obs.T, prior)
     for k in reversed(range(0, T - 1)):
         action = pol[policy, k]
         if k > timestep:
-            m_bwd[k, :, timestep] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, timestep]) * np.dot(obs.T, prior)
-            m_bwd_norm = m_bwd[k, :, timestep].sum()
-            m_bwd[k, :, timestep] /= m_bwd_norm
+            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * np.dot(obs.T, prior)
+            m_bwd_norm = m_bwd[k, :].sum()
+            m_bwd[k, :] /= m_bwd_norm
         elif 0 <= k <= timestep:
-            m_bwd[k, :, timestep] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, timestep]) * obs.T[:,o[k]]
-            m_bwd_norm = m_bwd[k, :, timestep].sum()
-            m_bwd[k, :, timestep] /= m_bwd_norm
+            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * obs.T[:,o[k]]
+            m_bwd_norm = m_bwd[k, :].sum()
+            m_bwd[k, :] /= m_bwd_norm
     return m_bwd
 
 
@@ -151,8 +150,8 @@ for i in range(T):
     o[i] = np.random.choice(n_h, p=p_oi)
     m_fwd = fwd_messages(timestep=i, policy=a)
     m_bwd = bwd_messages(timestep=i, policy=a)
-    # q_h nicht mal m^k, aktuelle observation wird ignoriert? obs[o[i]]
-    q_h[:, :, i] = obs[o[i]] * m_bwd[:, :, i] * m_fwd[:, :, i]
+    # durch die Multiplikation mit obs[o[i]] ist der belief des aktuellen timesteps i letztlich in q[i,:,:]!
+    q_h[:, :, i] = obs[o[i]] * (m_bwd * m_fwd)
     for k in range(T):
         q_h_norm[k, i] = q_h[k, :, i].sum()
         if q_h_norm[k, i] != 0:
