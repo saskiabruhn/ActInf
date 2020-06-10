@@ -101,6 +101,7 @@ pol = np.append(steps, last_step, 1).astype(int)
 def fwd_messages(timestep, policy):
     m_fwd = np.zeros((T, n_h))
     m_fwd[0, :] = 1. / n_h  # obs[o[0]]
+    m_fwd_norm = np.zeros((T))
     for k in range(1, T):
         # starting at timestep 1 to make sure in first step this works
         action = pol[policy, k - 1]
@@ -108,55 +109,73 @@ def fwd_messages(timestep, policy):
             # for current and past states use observations
             x = m_fwd[k - 1, :] * obs[o[k - 1]]
             m_fwd[k, :] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :].sum()
-            m_fwd[k, :] /= m_fwd_norm
+            m_fwd_norm[k] = m_fwd[k, :].sum()
+            if m_fwd_norm[k] != 0:
+                m_fwd[k, :] /= m_fwd_norm[k]
         elif k > timestep + 1:
             # for not yet seen states use prior
             x = m_fwd[k - 1, :] * np.dot(obs.T, prior)
             m_fwd[k, :] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :].sum()
-            m_fwd[k, :] /= m_fwd_norm
+            m_fwd_norm[k] = m_fwd[k, :].sum()
+            if m_fwd_norm[k] != 0:
+                m_fwd[k, :] /= m_fwd_norm[k]
 
-    return m_fwd
+    return m_fwd, m_fwd_norm
 
 
 # berechne backward messages
 def bwd_messages(timestep, policy):
     m_bwd = np.zeros((T, n_h))
+    m_bwd_norm = np.zeros((T))
     m_bwd[6, :] = np.dot(obs.T, prior)
     for k in reversed(range(0, T - 1)):
         action = pol[policy, k]
         if k > timestep:
             m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * np.dot(obs.T, prior)
-            m_bwd_norm = m_bwd[k, :].sum()
-            m_bwd[k, :] /= m_bwd_norm
+            m_bwd_norm[k] = m_bwd[k, :].sum()
+            if m_bwd_norm[k] != 0:
+                m_bwd[k, :] /= m_bwd_norm[k]
         elif 0 <= k <= timestep:
             m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * obs.T[:,o[k]]
-            m_bwd_norm = m_bwd[k, :].sum()
-            m_bwd[k, :] /= m_bwd_norm
-    return m_bwd
+            m_bwd_norm[k] = m_bwd[k, :].sum()
+            if m_bwd_norm[k] != 0:
+                m_bwd[k, :] /= m_bwd_norm[k]
+    return m_bwd, m_bwd_norm
 
 
 # a: index policy, p_h: aktueller Zustand, h: Vektor mit Zustand pro Schritt, p_h1: next state
 p_h = p_h0
 a = 42
-q_h = np.zeros((T, n_h, T))
-q_h_norm = np.zeros((T, T))
+q_h = np.zeros((T, n_h, T, n_pi))
+q_h_norm = np.zeros((T, T, n_pi))
 h = np.zeros(T + 1)
 o = np.zeros(T).astype(int)
+q_pi = np.zeros((n_pi, T))
 
 for i in range(T):
     p_oi = np.dot(obs, p_h)
     o[i] = np.random.choice(n_h, p=p_oi)
-    m_fwd = fwd_messages(timestep=i, policy=a)
-    m_bwd = bwd_messages(timestep=i, policy=a)
+    # for a in range(n_pi):
+    m_fwd, m_fwd_norm = fwd_messages(timestep=i, policy=a)
+    m_bwd, m_bwd_norm = bwd_messages(timestep=i, policy=a)
+
+    # to avoid 0 for the log in q_pi
+    for l in range(T):
+        if m_fwd_norm[l] == 0:
+            m_fwd_norm[l] = 0.0000001
     # durch die Multiplikation mit obs[o[i]] ist der belief des aktuellen timesteps i letztlich in q[i,:,:]!
-    q_h[:, :, i] = obs[o[i]] * (m_bwd * m_fwd)
+    q_h[:, :, i, a] = obs[o[i]] * (m_bwd * m_fwd)
     for k in range(T):
-        q_h_norm[k, i] = q_h[k, :, i].sum()
-        if q_h_norm[k, i] != 0:
-            q_h[k, :, i] /= q_h_norm[k, i]
-    p_h1 = np.dot(B[:, :, pol[a, i]], p_h)
+        q_h_norm[k, i, a] = q_h[k, :, i, a].sum()
+        if q_h_norm[k, i, a] != 0:
+            q_h[k, :, i, a] /= q_h_norm[k, i, a]
+    q_pi[a, i] = q_h_norm[T-1, i, a] * np.exp(np.log(m_fwd_norm).sum())
+
+    q_pi[:, i] /= q_pi[:, i].sum()
+
+    # action selection with maximum selection
+    max_pol = np.argmax(q_pi[:,i])
+    p_h1 = np.dot(B[:, :, pol[max_pol, i]], p_h)
     h[i + 1] = g = np.random.choice(n_h, p=p_h1)
     p_h = np.zeros(n_h)
     p_h[g] = 1
@@ -164,7 +183,7 @@ for i in range(T):
 # plot agent's way
 x = np.zeros(T)
 y = np.zeros(T)
-grid = q_h[6, :, 6].reshape((4, 4))
+grid = q_h[6, :, 6, max_pol].reshape((4, 4))
 fig = plt.figure(figsize=[12, 10])
 ax = fig.gca()
 sns.heatmap(grid, vmax=1, ax=ax, linewidths=2, xticklabels=False,
