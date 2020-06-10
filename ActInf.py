@@ -96,71 +96,73 @@ for i in range(n_pi):
 pol = np.append(steps, last_step, 1).astype(int)
 
 # berechne forward messages
-m_fwd = np.zeros((T, n_h, T))
 
-print(np.dot(obs, prior) == prior)
-# print(prior.shape)
 
-def fwd_messages(i):
-    m_fwd[0, :, i] = 1. / n_h  # obs[o[0]]
+def fwd_messages(timestep, policy):
+    m_fwd = np.zeros((T, n_h, T))
+    m_fwd[0, :, timestep] = 1. / n_h  # obs[o[0]]
     for k in range(1, T):
         # starting at timestep 1 to make sure in first step this works
-        action = pol[a, k - 1]
-        if 0 < k <= i + 1:
+        action = pol[policy, k - 1]
+        if 0 < k <= timestep + 1:
             # for current and past states use observations
-            x = m_fwd[k - 1, :, i] * obs[o[k - 1]]
-            m_fwd[k, :, i] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :, i].sum()
-            m_fwd[k, :, i] /= m_fwd_norm
-        elif k > i + 1:
+            x = m_fwd[k - 1, :, timestep] * obs[o[k - 1]]
+            m_fwd[k, :, timestep] = np.dot(B[:, :, action], x)
+            m_fwd_norm = m_fwd[k, :, timestep].sum()
+            m_fwd[k, :, timestep] /= m_fwd_norm
+        elif k > timestep + 1:
             # for not yet seen states use prior
-            x = m_fwd[k - 1, :, i] * np.dot(obs.T, prior)
-            m_fwd[k, :, i] = np.dot(B[:, :, action], x)
-            m_fwd_norm = m_fwd[k, :, i].sum()
-            m_fwd[k, :, i] /= m_fwd_norm
+            x = m_fwd[k - 1, :, timestep] * np.dot(obs.T, prior)
+            m_fwd[k, :, timestep] = np.dot(B[:, :, action], x)
+            m_fwd_norm = m_fwd[k, :, timestep].sum()
+            m_fwd[k, :, timestep] /= m_fwd_norm
+
+    return m_fwd
 
 
 # berechne backward messages
-m_bwd = np.zeros((T, n_h, T))
-
-
-def bwd_messages(i):
-    m_bwd[6, :, i] = np.dot(obs.T, prior)
+def bwd_messages(timestep, policy):
+    m_bwd = np.zeros((T, n_h, T))
+    m_bwd = np.zeros((T, n_h, T))
+    m_bwd[6, :, timestep] = np.dot(obs.T, prior)
     for k in reversed(range(0, T - 1)):
-        action = pol[a, k]
-        if k > i:
-            m_bwd[k, :, i] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, i]) * np.dot(obs.T, prior)
-            m_bwd_norm = m_bwd[k, :, i].sum()
-            m_bwd[k, :, i] /= m_bwd_norm
-        elif 0 <= k <= i:
-            m_bwd[k, :, i] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, i]) * obs.T[:,o[k]]
-            m_bwd_norm = m_bwd[k, :, i].sum()
-            m_bwd[k, :, i] /= m_bwd_norm
+        action = pol[policy, k]
+        if k > timestep:
+            m_bwd[k, :, timestep] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, timestep]) * np.dot(obs.T, prior)
+            m_bwd_norm = m_bwd[k, :, timestep].sum()
+            m_bwd[k, :, timestep] /= m_bwd_norm
+        elif 0 <= k <= timestep:
+            m_bwd[k, :, timestep] = np.dot(B[:, :, action].T, m_bwd[k + 1, :, timestep]) * obs.T[:,o[k]]
+            m_bwd_norm = m_bwd[k, :, timestep].sum()
+            m_bwd[k, :, timestep] /= m_bwd_norm
+    return m_bwd
 
 
 # a: index policy, p_h: aktueller Zustand, h: Vektor mit Zustand pro Schritt, p_h1: next state
 p_h = p_h0
 a = 42
 q_h = np.zeros((T, n_h, T))
+q_h_norm = np.zeros((T, T))
 h = np.zeros(T + 1)
 o = np.zeros(T).astype(int)
-for j in range(n_a):
-    for i in range(T):
-        if pol[a, i] == j:
-            p_oi = np.dot(obs, p_h)
-            o[i] = np.random.choice(n_h, p=p_oi)
-            fwd_messages(i)
-            bwd_messages(i)
-            # q_h nicht mal m^k?
-            q_h[:, :, i] = m_bwd[:, :, i] * m_fwd[:, :, i]
-            for k in range(T):
-                q_h[k, :, i] /= q_h[k, :, i].sum()
-            p_h1 = np.dot(B[:, :, j], p_h)
-            h[i + 1] = g = np.random.choice(n_h, p=p_h1)
-            p_h = np.zeros(n_h)
-            p_h[g] = 1
 
-        # plot agent's way
+for i in range(T):
+    p_oi = np.dot(obs, p_h)
+    o[i] = np.random.choice(n_h, p=p_oi)
+    m_fwd = fwd_messages(timestep=i, policy=a)
+    m_bwd = bwd_messages(timestep=i, policy=a)
+    # q_h nicht mal m^k, aktuelle observation wird ignoriert? obs[o[i]]
+    q_h[:, :, i] = obs[o[i]] * m_bwd[:, :, i] * m_fwd[:, :, i]
+    for k in range(T):
+        q_h_norm[k, i] = q_h[k, :, i].sum()
+        if q_h_norm[k, i] != 0:
+            q_h[k, :, i] /= q_h_norm[k, i]
+    p_h1 = np.dot(B[:, :, pol[a, i]], p_h)
+    h[i + 1] = g = np.random.choice(n_h, p=p_h1)
+    p_h = np.zeros(n_h)
+    p_h[g] = 1
+
+# plot agent's way
 x = np.zeros(T)
 y = np.zeros(T)
 grid = q_h[6, :, 6].reshape((4, 4))
