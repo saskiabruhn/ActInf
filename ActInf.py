@@ -100,14 +100,18 @@ pol = np.append(steps, last_step, 1).astype(int)
 
 def fwd_messages(timestep, policy):
     m_fwd = np.zeros((T, n_h))
-    m_fwd[0, :] = 1. / n_h  # obs[o[0]]
     m_fwd_norm = np.zeros((T))
+    # state 0 does not get a fwd message from before
+    m_fwd[0, :] = 1. / n_h  # obs[o[0]]
+
     for k in range(1, T):
-        # starting at timestep 1 to make sure in first step this works
+        # action from previous state to get to current state
         action = pol[policy, k - 1]
+        # messages up to one step further than current state can be calculated with seen observations
         if 0 < k <= timestep + 1:
             # for current and past states use observations
             x = m_fwd[k - 1, :] * obs[o[k - 1]]
+            # TODO: why is b not transposed here? why does it not work if so?
             m_fwd[k, :] = np.dot(B[:, :, action], x)
             m_fwd_norm[k] = m_fwd[k, :].sum()
             if m_fwd_norm[k] != 0:
@@ -115,6 +119,7 @@ def fwd_messages(timestep, policy):
         elif k > timestep + 1:
             # for not yet seen states use prior
             x = m_fwd[k - 1, :] * np.dot(obs.T, prior)
+            # TODO: why is b not transposed here? why does it not work if so?
             m_fwd[k, :] = np.dot(B[:, :, action], x)
             m_fwd_norm[k] = m_fwd[k, :].sum()
             if m_fwd_norm[k] != 0:
@@ -127,16 +132,18 @@ def fwd_messages(timestep, policy):
 def bwd_messages(timestep, policy):
     m_bwd = np.zeros((T, n_h))
     m_bwd_norm = np.zeros((T))
+    # last step does not get a bwd message from futre state
     m_bwd[6, :] = np.dot(obs.T, prior)
     for k in reversed(range(0, T - 1)):
+        # TODO: is this really the right action to use here?
         action = pol[policy, k]
-        if k > timestep:
+        if k >= timestep:
             m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * np.dot(obs.T, prior)
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
                 m_bwd[k, :] /= m_bwd_norm[k]
-        elif 0 <= k <= timestep:
-            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * obs.T[:,o[k]]
+        elif 0 <= k < timestep:
+            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * obs.T[o[k+1]]
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
                 m_bwd[k, :] /= m_bwd_norm[k]
