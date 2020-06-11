@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Spyder Editor
-
-This is a temporary script file.
-"""
-
 import numpy as np
 import itertools
 import matplotlib.pylab as plt
@@ -30,10 +23,10 @@ for i in range(n_h - 1):
 obs = np.zeros((n_o, n_h))
 for i in range(n_h):
     obs[i, i] = b = 1
-    obs[i - 1, i] = (1 - b) / 4
-    obs[i, i - 1] = (1 - b) / 4
-    obs[i - 4, i] = (1 - b) / 4
-    obs[i, i - 4] = (1 - b) / 4
+    # obs[i - 1, i] = (1 - b) / 4
+    # obs[i, i - 1] = (1 - b) / 4
+    # obs[i - 4, i] = (1 - b) / 4
+    # obs[i, i - 4] = (1 - b) / 4
 
 # p(h_t+1|h_t, r) step right
 p_r = np.zeros((n_h, n_h))
@@ -110,17 +103,13 @@ def fwd_messages(timestep, policy):
         # messages up to one step further than current state can be calculated with seen observations
         if 0 < k <= timestep + 1:
             # for current and past states use observations
-            x = m_fwd[k - 1, :] * obs[o[k - 1]]
-            # TODO: why is b not transposed here? why does it not work if so?
-            m_fwd[k, :] = np.dot(B[:, :, action], x)
+            m_fwd[k, :] = B[:, :, action] @ (m_fwd[k - 1, :] * obs[o[k - 1]])
             m_fwd_norm[k] = m_fwd[k, :].sum()
             if m_fwd_norm[k] != 0:
                 m_fwd[k, :] /= m_fwd_norm[k]
         elif k > timestep + 1:
             # for not yet seen states use prior
-            x = m_fwd[k - 1, :] * np.dot(obs.T, prior)
-            # TODO: why is b not transposed here? why does it not work if so?
-            m_fwd[k, :] = np.dot(B[:, :, action], x)
+            m_fwd[k, :] = B[:, :, action] @ (m_fwd[k - 1, :] * (obs @ prior))
             m_fwd_norm[k] = m_fwd[k, :].sum()
             if m_fwd_norm[k] != 0:
                 m_fwd[k, :] /= m_fwd_norm[k]
@@ -133,17 +122,18 @@ def bwd_messages(timestep, policy):
     m_bwd = np.zeros((T, n_h))
     m_bwd_norm = np.zeros((T))
     # last step does not get a bwd message from futre state
-    m_bwd[6, :] = np.dot(obs.T, prior)
+    m_bwd[6, :] = obs @ prior
     for k in reversed(range(0, T - 1)):
-        # TODO: is this really the right action to use here?
         action = pol[policy, k]
-        if k >= timestep:
-            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * np.dot(obs.T, prior)
+
+        # TODO: why is B transposed here?
+        if k > timestep:
+            m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * (obs @ prior))
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
                 m_bwd[k, :] /= m_bwd_norm[k]
-        elif 0 <= k < timestep:
-            m_bwd[k, :] = np.dot(B[:, :, action].T, m_bwd[k + 1, :]) * obs.T[o[k+1]]
+        elif 0 <= k <= timestep:
+            m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * obs[o[k+1]])
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
                 m_bwd[k, :] /= m_bwd_norm[k]
@@ -162,21 +152,21 @@ q_pi = np.zeros((n_pi, T))
 for i in range(T):
     p_oi = np.dot(obs, p_h)
     o[i] = np.random.choice(n_h, p=p_oi)
-    # for a in range(n_pi):
-    m_fwd, m_fwd_norm = fwd_messages(timestep=i, policy=a)
-    m_bwd, m_bwd_norm = bwd_messages(timestep=i, policy=a)
+    for a in range(n_pi):
+        m_fwd, m_fwd_norm = fwd_messages(timestep=i, policy=a)
+        m_bwd, m_bwd_norm = bwd_messages(timestep=i, policy=a)
 
-    # to avoid 0 for the log in q_pi
-    for l in range(T):
-        if m_fwd_norm[l] == 0:
-            m_fwd_norm[l] = 0.0000001
-    # durch die Multiplikation mit obs[o[i]] ist der belief des aktuellen timesteps i letztlich in q[i,:,:]!
-    q_h[:, :, i, a] = obs[o[i]] * (m_bwd * m_fwd)
-    for k in range(T):
-        q_h_norm[k, i, a] = q_h[k, :, i, a].sum()
-        if q_h_norm[k, i, a] != 0:
-            q_h[k, :, i, a] /= q_h_norm[k, i, a]
-    q_pi[a, i] = q_h_norm[T-1, i, a] * np.exp(np.log(m_fwd_norm).sum())
+        # to avoid 0 for the log in q_pi
+        for l in range(T):
+            if m_fwd_norm[l] == 0:
+                m_fwd_norm[l] = 0.0000001
+        # TODO: durch die Multiplikation mit obs[o[i]] ist der belief des aktuellen timesteps i letztlich in q[i,:,:]!
+        q_h[:, :, i, a] = (m_bwd * m_fwd) #obs[o[i]]
+        for k in range(T):
+            q_h_norm[k, i, a] = q_h[k, :, i, a].sum()
+            if q_h_norm[k, i, a] != 0:
+                q_h[k, :, i, a] /= q_h_norm[k, i, a]
+        q_pi[a, i] = q_h_norm[T-1, i, a] * np.exp(np.log(m_fwd_norm).sum())
 
     q_pi[:, i] /= q_pi[:, i].sum()
 
@@ -201,3 +191,4 @@ for i in range(T):
     y[i] = h[i] // 4 + 0.5
 plt.plot(x, y, linewidth=3, alpha=0.7)
 plt.show()
+
