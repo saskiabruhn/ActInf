@@ -13,9 +13,10 @@ n_pi = (n_a - 1) ** (T - 1)  # strategies
 p_h0 = np.zeros(n_h)
 p_h0[0] = 1
 
+goal = 15
 # prior belief p(o_t) Wo will ich hin?
 prior = np.zeros(n_h)
-prior[15] = p = 0.9
+prior[goal] = p = 0.9
 for i in range(n_h - 1):
     prior[i] = (1 - p) / (n_h - 1)
 
@@ -126,13 +127,13 @@ def bwd_messages(timestep, policy):
     for k in reversed(range(0, T - 1)):
         action = pol[policy, k]
 
-        # TODO: why is B transposed here?
-        if k > timestep:
+        # B is transposed here because we want to do somae inverse bayes to infer the probability of having been in some state given now we are in another state
+        if k >= timestep:
             m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * (obs @ prior))
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
                 m_bwd[k, :] /= m_bwd_norm[k]
-        elif 0 <= k <= timestep:
+        elif 0 <= k < timestep:
             m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * obs[o[k+1]])
             m_bwd_norm[k] = m_bwd[k, :].sum()
             if m_bwd_norm[k] != 0:
@@ -142,15 +143,17 @@ def bwd_messages(timestep, policy):
 
 # a: index policy, p_h: aktueller Zustand, h: Vektor mit Zustand pro Schritt, p_h1: next state
 p_h = p_h0
-a = 42
 q_h = np.zeros((T, n_h, T, n_pi))
 q_h_norm = np.zeros((T, T, n_pi))
 h = np.zeros(T + 1)
 o = np.zeros(T).astype(int)
 q_pi = np.zeros((n_pi, T))
-
+obs_m = np.zeros((T, n_h))
+obs_m[:, goal] = [1,1,1,1,1,1,1]
+print(obs_m)
 for i in range(T):
     p_oi = np.dot(obs, p_h)
+    obs_m[i, :] = p_oi
     o[i] = np.random.choice(n_h, p=p_oi)
     for a in range(n_pi):
         m_fwd, m_fwd_norm = fwd_messages(timestep=i, policy=a)
@@ -160,8 +163,7 @@ for i in range(T):
         for l in range(T):
             if m_fwd_norm[l] == 0:
                 m_fwd_norm[l] = 0.0000001
-        # TODO: durch die Multiplikation mit obs[o[i]] ist der belief des aktuellen timesteps i letztlich in q[i,:,:]!
-        q_h[:, :, i, a] = (m_bwd * m_fwd) #obs[o[i]]
+        q_h[:, :, i, a] = (m_bwd * m_fwd) * obs_m
         for k in range(T):
             q_h_norm[k, i, a] = q_h[k, :, i, a].sum()
             if q_h_norm[k, i, a] != 0:
@@ -191,4 +193,3 @@ for i in range(T):
     y[i] = h[i] // 4 + 0.5
 plt.plot(x, y, linewidth=3, alpha=0.7)
 plt.show()
-
