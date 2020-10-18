@@ -1,15 +1,20 @@
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.layers import Layer
-import tensorflow_probability as tfp
-from scipy.stats import entropy
+import itertools
+import matplotlib.pylab as plt
+import seaborn as sns
 
 n_h = 16  # hidden states
 n_o = n_h  # observations
-# T = 7  # timesteps
+T = 7  # timesteps
 n_a = 5  # actions
+n_pi = (n_a - 1) ** (T - 1)  # strategies
+
+# start state p(h1)
+p_h0 = np.zeros(n_h)
+p_h0[0] = 1
 
 goal = 15
+# prior belief p(o_t) Wo will ich hin?
 prior = np.zeros(n_h)
 prior[goal] = p = 0.9
 for i in range(n_h - 1):
@@ -19,6 +24,10 @@ for i in range(n_h - 1):
 obs = np.zeros((n_o, n_h))
 for i in range(n_h):
     obs[i, i] = b = 1
+    obs[i - 1, i] = (1 - b) / 4
+    obs[i, i - 1] = (1 - b) / 4
+    obs[i - 4, i] = (1 - b) / 4
+    obs[i, i - 4] = (1 - b) / 4
 
 # p(h_t+1|h_t, r) step right
 p_r = np.zeros((n_h, n_h))
@@ -28,7 +37,7 @@ for i in range(n_h):
         p_r[i - 1, i - 1] = 1
 
     else:
-        p_r[i, i - 1] = c = 1
+        p_r[i, i - 1] = c = 0.9
         p_r[i - 1, i - 1] = 1 - c
 
 # p(h_t+1|h_t, l) step left
@@ -38,7 +47,7 @@ for i in range(n_h):
         p_l[i - 1, i] = 0
         p_l[i, i] = 1
     else:
-        p_l[i - 1, i] = d = 1
+        p_l[i - 1, i] = d = 0.9
         p_l[i, i] = 1 - d
 
 # p(h_t+1|h_t, u) step up
@@ -48,7 +57,7 @@ for i in range(n_h):
         p_u[i, i - 4] = 0
         p_u[i - 4, i - 4] = 1
     else:
-        p_u[i, i - 4] = e = 1
+        p_u[i, i - 4] = e = 0.9
         p_u[i - 4, i - 4] = 1 - e
 
 # p(h_t+1|h_t, d) step down
@@ -58,7 +67,7 @@ for i in range(n_h):
         p_d[i - 4, i] = 0
         p_d[i, i] = 1
     else:
-        p_d[i - 4, i] = f = 1
+        p_d[i - 4, i] = f = 0.9
         p_d[i, i] = 1 - f
 
 # p(h_t+1|h_t, s) stay
@@ -67,108 +76,121 @@ for i in range(n_h):
     p_s[i, i] = 1
 
 # 16x16x4 Matrix mit allen Aktionen
-trans = np.zeros((n_h, n_h, n_a))
-trans[:, :, 0] = p_r
-trans[:, :, 1] = p_l
-trans[:, :, 2] = p_u
-trans[:, :, 3] = p_d
-trans[:, :, 4] = p_s
+B = np.zeros((n_h, n_h, n_a))
+B[:, :, 0] = p_r
+B[:, :, 1] = p_l
+B[:, :, 2] = p_u
+B[:, :, 3] = p_d
+B[:, :, 4] = p_s
 
-class Model(Layer):
+# policies
+steps = np.array(list(itertools.product(list(range(n_a - 1)), repeat=T - 1)))
+last_step = np.zeros((n_pi, 1))
+for i in range(n_pi):
+    last_step[i] = 4
+pol = np.append(steps, last_step, 1).astype(int)
 
-    def __init__(self):
-        super(Model, self).__init__()
-
-        self.hidden_layer_1 = tf.keras.layers.Dense(units=100,
-                                                    activation=tf.keras.activations.relu,
-                                                    input_shape=(1, 16)
-                                                    )
-        self.hidden_layer_2 = tf.keras.layers.Dense(units=100,
-                                                    activation=tf.keras.activations.relu
-                                                    )
-        self.output_layer = tf.keras.layers.Dense(units=n_a,
-                                                  activation=tf.keras.activations.softmax
-                                                  )
-
-    def call(self, x):
-        x = self.hidden_layer_1(x)
-        x = self.hidden_layer_2(x)
-        x = self.output_layer(x)
-        return x
-
-def EFE_loss(value_state, value_next_state, reward):
-    return tf.nn.l2_loss(value_state + reward - value_next_state)
-
-def p_loss_func(policy_output, value_output):
-    pol_entropy = entropy(tf.keras.backend.get_value(policy_output))
-    return tf.math.reduce_mean(policy_output * tf.math.log(-value_output)) + pol_entropy
-
-    # return tf.math.reduce_mean(policy_output * tf.math.log(value_output)) + tfp.distributions.Distribution(policy_output).entropy()
-
-policy_net = Model()
-value_net = Model()
-
-opt_p = tf.optimizers.Adam(0.001)
-opt_v = tf.optimizers.Adam(0.001)
-
-state = np.zeros(n_h)
-state[0] = 1
-state = state.reshape(1,16)
-actions = ['right', 'left', 'up', 'down', 'stay']
-print('init state: ', np.argmax(state))
-
-for j in range(15000):
-    state = np.zeros(n_h)
-    state[0] = 1
-    state = state.reshape(1,16)
-    for i in range(10):
-        with tf.GradientTape(persistent=True) as tape:
-            print('i', i)
-            action = policy_net(state)
-            action_prob = tf.keras.backend.get_value(action)[0]
-            sample = np.random.choice(np.array([0,1,2,3,4]), p=action_prob)
-
-            action_idx = np.random.choice(np.array([0,1,2,3,4]), p=action_prob)
-            print('action: ', actions[action_idx])
-
-            # pol_net_val = tf.keras.backend.get_value(action)
-            # print(pol_net_val)
-
-            next_state = np.dot(trans[:,:,action_idx], state.reshape(16,1)).reshape(1,16)
-            current_reward = np.log(prior[np.argmax(next_state)])
-
-            value_state = value_net(state)
-            print('val: ', value_state)
-            value_next_state = value_net(next_state)
-
-            v_loss = EFE_loss(value_state, value_next_state, current_reward)
-            # print('v_loss', v_loss)
-            gradients_v = tape.gradient(v_loss, value_net.trainable_variables)
-            opt_v.apply_gradients(zip(gradients_v, value_net.trainable_variables))
-
-            p_loss = p_loss_func(action, value_state)
-            # print('p_loss', p_loss)
-            gradients_p = tape.gradient(p_loss, value_net.trainable_variables)
-            opt_p.apply_gradients(zip(gradients_p, policy_net.trainable_variables))
-
-            state = next_state.reshape(1,16)
-            print('next state: ', np.argmax(next_state))
+# berechne forward messages
 
 
+def fwd_messages(timestep, policy):
+    m_fwd = np.zeros((T, n_h))
+    m_fwd_norm = np.zeros((T))
+    # state 0 does not get a fwd message from before
+    m_fwd[0, :] = 1. / n_h  # obs[o[0]]
+
+    for k in range(1, T):
+        # action from previous state to get to current state
+        action = pol[policy, k - 1]
+        # messages up to one step further than current state can be calculated with seen observations
+        if 0 < k <= timestep + 1:
+            # for current and past states use observations
+            m_fwd[k, :] = B[:, :, action] @ (m_fwd[k - 1, :] * obs[o[k - 1]])
+            m_fwd_norm[k] = m_fwd[k, :].sum()
+            if m_fwd_norm[k] != 0:
+                m_fwd[k, :] /= m_fwd_norm[k]
+        elif k > timestep + 1:
+            # for not yet seen states use prior
+            m_fwd[k, :] = B[:, :, action] @ (m_fwd[k - 1, :] * (obs @ prior))
+            m_fwd_norm[k] = m_fwd[k, :].sum()
+            if m_fwd_norm[k] != 0:
+                m_fwd[k, :] /= m_fwd_norm[k]
+
+    return m_fwd, m_fwd_norm
 
 
-state = np.zeros(n_h)
-state[0] = 1
-state = state.reshape(1,16)
-actions = ['right', 'left', 'up', 'down', 'stay']
-print('init state: ', np.argmax(state))
+# berechne backward messages
+def bwd_messages(timestep, policy):
+    m_bwd = np.zeros((T, n_h))
+    m_bwd_norm = np.zeros((T))
+    # last step does not get a bwd message from futre state
+    m_bwd[6, :] = obs @ prior
+    for k in reversed(range(0, T - 1)):
+        action = pol[policy, k]
 
-for i in range(10):
-  action = policy_net(state)
-  action_idx = tf.keras.backend.get_value(tf.math.argmax(action, axis=1))[0]
-  print('action: ', actions[action_idx])
+        # B is transposed here because we want to do some inverse bayes to infer the probability of having been in some state given now we are in another state
+        if k >= timestep:
+            m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * (obs @ prior))
+            m_bwd_norm[k] = m_bwd[k, :].sum()
+            if m_bwd_norm[k] != 0:
+                m_bwd[k, :] /= m_bwd_norm[k]
+        elif 0 <= k < timestep:
+            m_bwd[k, :] = B[:, :, action].T @ (m_bwd[k + 1, :] * obs[o[k+1]])
+            m_bwd_norm[k] = m_bwd[k, :].sum()
+            if m_bwd_norm[k] != 0:
+                m_bwd[k, :] /= m_bwd_norm[k]
+    return m_bwd, m_bwd_norm
 
-  next_state = np.dot(trans[:,:,action_idx], state.reshape(16,1)).reshape(1,16)
 
-  state = next_state.reshape(1,16)
-  print('next state: ', np.argmax(next_state))
+# a: index policy, p_h: aktueller Zustand, h: Vektor mit Zustand pro Schritt, p_h1: next state
+p_h = p_h0
+q_h = np.zeros((T, n_h, T, n_pi))
+q_h_norm = np.zeros((T, T, n_pi))
+h = np.zeros(T + 1)
+o = np.zeros(T).astype(int)
+q_pi = np.zeros((n_pi, T))
+m_obs = np.zeros((T, n_h))
+m_obs[:, goal] = [1, 1, 1, 1, 1, 1, 1]
+print(m_obs)
+for i in range(T):
+    p_oi = np.dot(obs, p_h)
+    m_obs[i, :] = p_oi
+    o[i] = np.random.choice(n_h, p=p_oi)
+    for a in range(n_pi):
+        m_fwd, m_fwd_norm = fwd_messages(timestep=i, policy=a)
+        m_bwd, m_bwd_norm = bwd_messages(timestep=i, policy=a)
+
+        # to avoid 0 for the log in q_pi
+        for l in range(T):
+            if m_fwd_norm[l] == 0:
+                m_fwd_norm[l] = 0.0000001
+        q_h[:, :, i, a] = (m_bwd * m_fwd) * m_obs
+        for k in range(T):
+            q_h_norm[k, i, a] = q_h[k, :, i, a].sum()
+            if q_h_norm[k, i, a] != 0:
+                q_h[k, :, i, a] /= q_h_norm[k, i, a]
+        q_pi[a, i] = q_h_norm[T-1, i, a] * np.exp(np.log(m_fwd_norm).sum())
+
+    q_pi[:, i] /= q_pi[:, i].sum()
+
+    # action selection with maximum selection
+    max_pol = np.argmax(q_pi[:,i])
+    p_h1 = np.dot(B[:, :, pol[max_pol, i]], p_h)
+    h[i + 1] = g = np.random.choice(n_h, p=p_h1)
+    p_h = np.zeros(n_h)
+    p_h[g] = 1
+
+# plot agent's way
+x = np.zeros(T)
+y = np.zeros(T)
+grid = q_h[6, :, 6, max_pol].reshape((4, 4))
+fig = plt.figure(figsize=[12, 10])
+ax = fig.gca()
+sns.heatmap(grid, vmax=1, ax=ax, linewidths=2, xticklabels=False,
+            yticklabels=False).invert_yaxis()
+
+for i in range(T):
+    x[i] = h[i] % 4 + 0.5
+    y[i] = h[i] // 4 + 0.5
+plt.plot(x, y, linewidth=3, alpha=0.7)
+plt.show()
