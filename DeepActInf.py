@@ -1,19 +1,17 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Layer
-import tensorflow_probability as tfp
-from scipy.stats import entropy
 
 n_h = 16  # hidden states
 n_o = n_h  # observations
 # T = 7  # timesteps
 n_a = 5  # actions
 
-goal = 15
-prior = np.zeros(n_h)
-prior[goal] = p = 0.9
+goal =15
+reward = np.zeros(n_h)
+reward[goal] = p = 0.9
 for i in range(n_h - 1):
-    prior[i] = (1 - p) / (n_h - 1)
+    reward[i] = (1 - p) / (n_h - 1)
 
 # probability observation p(o|h)
 obs = np.zeros((n_o, n_h))
@@ -97,13 +95,11 @@ class Model(Layer):
         return x
 
 def EFE_loss(value_state, value_next_state, reward):
-    return tf.nn.l2_loss(value_state + reward - value_next_state)
+    return tf.keras.losses.MSE(value_state, value_next_state - reward)
 
 def p_loss_func(policy_output, value_output):
-    pol_entropy = entropy(tf.keras.backend.get_value(policy_output))
-    return tf.math.reduce_mean(policy_output * tf.math.log(-value_output)) + pol_entropy
+   return tf.math.reduce_mean(policy_output * tf.math.log(value_output))
 
-    # return tf.math.reduce_mean(policy_output * tf.math.log(value_output)) + tfp.distributions.Distribution(policy_output).entropy()
 
 policy_net = Model()
 value_net = Model()
@@ -117,58 +113,35 @@ state = state.reshape(1,16)
 actions = ['right', 'left', 'up', 'down', 'stay']
 print('init state: ', np.argmax(state))
 
-for j in range(15000):
-    state = np.zeros(n_h)
-    state[0] = 1
-    state = state.reshape(1,16)
-    for i in range(10):
-        with tf.GradientTape(persistent=True) as tape:
-            print('i', i)
-            action = policy_net(state)
-            action_prob = tf.keras.backend.get_value(action)[0]
-            sample = np.random.choice(np.array([0,1,2,3,4]), p=action_prob)
+with tf.GradientTape(persistent=True) as tape:
+    for i in range(1000):
+        print('i', i)
+        action = policy_net(state)
+        action_idx = tf.keras.backend.get_value(tf.math.argmax(action, axis=1))[0]
+        print('action: ', actions[action_idx])
 
-            action_idx = np.random.choice(np.array([0,1,2,3,4]), p=action_prob)
-            print('action: ', actions[action_idx])
+        next_state = np.dot(trans[:,:,action_idx], state.reshape(16,1)).reshape(1,16)
+        current_reward = reward[np.argmax(next_state)]
 
-            # pol_net_val = tf.keras.backend.get_value(action)
-            # print(pol_net_val)
+        value_state = value_net(state)
+        print('val: ', value_state)
+        value_next_state = value_net(next_state)
 
-            next_state = np.dot(trans[:,:,action_idx], state.reshape(16,1)).reshape(1,16)
-            current_reward = np.log(prior[np.argmax(next_state)])
+        v_loss = EFE_loss(value_state, value_next_state, current_reward)
+        print('v_loss', v_loss)
+        gradients_v = tape.gradient(v_loss, value_net.trainable_variables)
+        opt_v.apply_gradients(zip(gradients_v, value_net.trainable_variables))
 
-            value_state = value_net(state)
-            print('val: ', value_state)
-            value_next_state = value_net(next_state)
+        p_loss = p_loss_func(action, value_state)
+        print('p_loss', p_loss)
+        gradients_p = tape.gradient(p_loss, value_net.trainable_variables)
+        opt_p.apply_gradients(zip(gradients_p, policy_net.trainable_variables))
 
-            v_loss = EFE_loss(value_state, value_next_state, current_reward)
-            # print('v_loss', v_loss)
-            gradients_v = tape.gradient(v_loss, value_net.trainable_variables)
-            opt_v.apply_gradients(zip(gradients_v, value_net.trainable_variables))
+        state = next_state.reshape(1,16)
 
-            p_loss = p_loss_func(action, value_state)
-            # print('p_loss', p_loss)
-            gradients_p = tape.gradient(p_loss, value_net.trainable_variables)
-            opt_p.apply_gradients(zip(gradients_p, policy_net.trainable_variables))
-
-            state = next_state.reshape(1,16)
-            print('next state: ', np.argmax(next_state))
+        print('next state: ', np.argmax(next_state))
 
 
 
 
-state = np.zeros(n_h)
-state[0] = 1
-state = state.reshape(1,16)
-actions = ['right', 'left', 'up', 'down', 'stay']
-print('init state: ', np.argmax(state))
 
-for i in range(10):
-  action = policy_net(state)
-  action_idx = tf.keras.backend.get_value(tf.math.argmax(action, axis=1))[0]
-  print('action: ', actions[action_idx])
-
-  next_state = np.dot(trans[:,:,action_idx], state.reshape(16,1)).reshape(1,16)
-
-  state = next_state.reshape(1,16)
-  print('next state: ', np.argmax(next_state))
